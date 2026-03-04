@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "MeramAPK",
+    "name": "Meram",
     "slug": "MeramAPK",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -15,12 +15,17 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.hasan2811.meramapk",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
+      "permissions": [
+        "INTERNET"
+      ],
       "predictiveBackGestureEnabled": false
     },
     "web": {
