@@ -1,17 +1,21 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
-  ActivityIndicator,
   StyleSheet,
   Text,
   StatusBar,
   Platform,
   BackHandler,
+  ToastAndroid,
+  RefreshControl,
+  ScrollView,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
+import NetInfo from '@react-native-community/netinfo';
 import * as Notifications from 'expo-notifications';
+import LoadingBar from './LoadingBar';
+import OfflineScreen from './OfflineScreen';
 
-// Konfigurasi tampilan notifikasi saat app foreground
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -22,12 +26,18 @@ Notifications.setNotificationHandler({
   }),
 });
 
-export default function AppWebView() {
-  const [isLoading, setIsLoading] = useState(true);
-  const [hasError, setHasError] = useState(false);
-  const webViewRef = useRef<WebView>(null);
+const APP_URL = 'https://nmdctr--nmdc-tr-6733e.asia-southeast1.hosted.app/feed';
+const USER_AGENT = 'MeramApp/1.0 (Android; Expo) react-native-webview';
 
-  // ── 1. Request push notification permission ──────────────────────
+export default function AppWebView() {
+  const [loadProgress, setLoadProgress] = useState(0);
+  const [isOffline, setIsOffline] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const webViewRef = useRef<WebView>(null);
+  const canGoBackRef = useRef(false);
+  const lastBackPress = useRef(0);
+
+  // ── 1. Push Notification permission ─────────────────────────────
   useEffect(() => {
     (async () => {
       const { status } = await Notifications.requestPermissionsAsync();
@@ -38,21 +48,53 @@ export default function AppWebView() {
     })();
   }, []);
 
-  // ── 2. Android Hardware Back Button ──────────────────────────────
+  // ── 2. Offline detection ─────────────────────────────────────────
   useEffect(() => {
-    const handleBackPress = () => {
-      if (webViewRef.current) {
-        webViewRef.current.goBack();
-        return true; // navigasi mundur di WebView, cegah keluar app
-      }
-      return false; // biarkan sistem handle (keluar app)
-    };
-
-    const subscription = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
-    return () => subscription.remove();
+    const unsubscribe = NetInfo.addEventListener(state => {
+      setIsOffline(!state.isConnected);
+    });
+    return () => unsubscribe();
   }, []);
 
-  // ── 3. Status bar height fix (Android overlap) ───────────────────
+  // ── 3. Smart Back Handler ─────────────────────────────────────────
+  useEffect(() => {
+    const handleBackPress = () => {
+      if (canGoBackRef.current) {
+        webViewRef.current?.goBack();
+        return true;
+      }
+      // Double-tap back to exit
+      const now = Date.now();
+      if (now - lastBackPress.current < 2000) {
+        BackHandler.exitApp();
+        return true;
+      }
+      lastBackPress.current = now;
+      if (Platform.OS === 'android') {
+        ToastAndroid.show('Tekan lagi untuk keluar', ToastAndroid.SHORT);
+      }
+      return true;
+    };
+    const sub = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
+    return () => sub.remove();
+  }, []);
+
+  // ── 4. Pull-to-refresh ───────────────────────────────────────────
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    webViewRef.current?.reload();
+    setTimeout(() => setRefreshing(false), 1500);
+  }, []);
+
+  // ── 5. Retry dari offline screen ─────────────────────────────────
+  const handleRetry = useCallback(async () => {
+    const state = await NetInfo.fetch();
+    if (state.isConnected) {
+      setIsOffline(false);
+      webViewRef.current?.reload();
+    }
+  }, []);
+
   const statusBarHeight = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
 
   return (
@@ -64,28 +106,44 @@ export default function AppWebView() {
         animated={true}
       />
 
-      {isLoading && !hasError && (
-        <ActivityIndicator style={styles.loader} size="large" color="#3B82F6" />
-      )}
-
-      {hasError ? (
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Koneksi terputus atau gagal memuat halaman.</Text>
-        </View>
+      {isOffline ? (
+        <OfflineScreen onRetry={handleRetry} />
       ) : (
-        <WebView
-          ref={webViewRef}
-          source={{ uri: 'https://nmdctr--nmdc-tr-6733e.asia-southeast1.hosted.app/feed' }}
-          style={styles.webview}
-          onLoadEnd={() => setIsLoading(false)}
-          onError={() => {
-            setIsLoading(false);
-            setHasError(true);
-          }}
-          javaScriptEnabled={true}
-          domStorageEnabled={true}
-          allowsBackForwardNavigationGestures={true}
-        />
+        <>
+          {/* Progress bar */}
+          <LoadingBar progress={loadProgress} />
+
+          {/* WebView dalam ScrollView untuk Pull-to-Refresh */}
+          <ScrollView
+            contentContainerStyle={styles.scrollContent}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                colors={['#3B82F6']}
+                tintColor="#3B82F6"
+              />
+            }
+          >
+            <WebView
+              ref={webViewRef}
+              source={{ uri: APP_URL }}
+              style={styles.webview}
+              userAgent={USER_AGENT}
+              javaScriptEnabled={true}
+              domStorageEnabled={true}
+              sharedCookiesEnabled={true}
+              thirdPartyCookiesEnabled={true}
+              allowsBackForwardNavigationGestures={true}
+              onLoadProgress={({ nativeEvent }) => setLoadProgress(nativeEvent.progress)}
+              onLoadEnd={() => setLoadProgress(1)}
+              onNavigationStateChange={nav => {
+                canGoBackRef.current = nav.canGoBack;
+              }}
+              onError={() => setLoadProgress(1)}
+            />
+          </ScrollView>
+        </>
       )}
     </View>
   );
@@ -96,13 +154,11 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#ffffff',
   },
-  webview: { flex: 1 },
-  loader: {
-    position: 'absolute',
-    top: '50%',
-    alignSelf: 'center',
-    zIndex: 1,
+  scrollContent: {
+    flex: 1,
   },
-  errorContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
-  errorText: { color: 'red', fontSize: 16, textAlign: 'center' },
+  webview: {
+    flex: 1,
+    height: '100%',
+  },
 });
