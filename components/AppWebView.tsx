@@ -94,6 +94,25 @@ export default function AppWebView() {
 
   const statusBarHeight = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
 
+  // ── 5. Fallback untuk Web Preview ─────────────────────────────────
+  if (Platform.OS === 'web') {
+    return (
+      <View style={[styles.container, { paddingTop: statusBarHeight }]}>
+        <StatusBar backgroundColor="#ffffff" barStyle="dark-content" translucent={false} />
+        <iframe
+          src={APP_URL}
+          style={{ width: '100%', height: '100%', border: 'none' }}
+          title="Meram App Web Preview"
+        />
+        <View style={styles.webWarning}>
+          <Text style={styles.webWarningText}>
+            Mode Preview Web (Fitur Native tidak aktif)
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.container, { paddingTop: statusBarHeight }]}>
       <StatusBar
@@ -177,5 +196,18 @@ const styles = StyleSheet.create({
     flex: 1,
     height: '100%',
     backgroundColor: '#ffffff', // Menghindari sekilas blank background
+  },
+  webWarning: {
+    position: 'absolute',
+    bottom: 0,
+    width: '100%',
+    backgroundColor: 'rgba(255, 152, 0, 0.9)',
+    padding: 8,
+    alignItems: 'center',
+  },
+  webWarningText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
 });
