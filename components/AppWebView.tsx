@@ -7,8 +7,7 @@ import {
   Platform,
   BackHandler,
   ToastAndroid,
-  RefreshControl,
-  ScrollView,
+  Linking,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import NetInfo from '@react-native-community/netinfo';
@@ -32,7 +31,6 @@ const USER_AGENT = 'MeramApp/1.0 (Android; Expo) react-native-webview';
 export default function AppWebView() {
   const [loadProgress, setLoadProgress] = useState(0);
   const [isOffline, setIsOffline] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const webViewRef = useRef<WebView>(null);
   const canGoBackRef = useRef(false);
   const lastBackPress = useRef(0);
@@ -51,19 +49,25 @@ export default function AppWebView() {
   // ── 2. Offline detection ─────────────────────────────────────────
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
-      setIsOffline(!state.isConnected);
+      // Hanya set offline jika benar-benar tidak ada koneksi
+      // Null bisa terjadi saat pertama kali load, kita asumsikan online
+      if (state.isConnected === false) {
+        setIsOffline(true);
+      } else {
+        setIsOffline(false);
+      }
     });
     return () => unsubscribe();
   }, []);
 
-  // ── 3. Smart Back Handler ─────────────────────────────────────────
+  // ── 3. Smart Back Handler (Android) ─────────────────────────────
   useEffect(() => {
     const handleBackPress = () => {
       if (canGoBackRef.current) {
         webViewRef.current?.goBack();
         return true;
       }
-      // Double-tap back to exit
+      // Double-tap back untuk keluar app
       const now = Date.now();
       if (now - lastBackPress.current < 2000) {
         BackHandler.exitApp();
@@ -71,7 +75,7 @@ export default function AppWebView() {
       }
       lastBackPress.current = now;
       if (Platform.OS === 'android') {
-        ToastAndroid.show('Tekan lagi untuk keluar', ToastAndroid.SHORT);
+        ToastAndroid.show('Tekan sekali lagi untuk keluar', ToastAndroid.SHORT);
       }
       return true;
     };
@@ -79,14 +83,7 @@ export default function AppWebView() {
     return () => sub.remove();
   }, []);
 
-  // ── 4. Pull-to-refresh ───────────────────────────────────────────
-  const onRefresh = useCallback(() => {
-    setRefreshing(true);
-    webViewRef.current?.reload();
-    setTimeout(() => setRefreshing(false), 1500);
-  }, []);
-
-  // ── 5. Retry dari offline screen ─────────────────────────────────
+  // ── 4. Retry dari offline screen ─────────────────────────────────
   const handleRetry = useCallback(async () => {
     const state = await NetInfo.fetch();
     if (state.isConnected) {
@@ -110,39 +107,61 @@ export default function AppWebView() {
         <OfflineScreen onRetry={handleRetry} />
       ) : (
         <>
-          {/* Progress bar */}
+          {/* Progress bar ala browser Chrome */}
           <LoadingBar progress={loadProgress} />
 
-          {/* WebView dalam ScrollView untuk Pull-to-Refresh */}
-          <ScrollView
-            contentContainerStyle={styles.scrollContent}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={onRefresh}
-                colors={['#3B82F6']}
-                tintColor="#3B82F6"
-              />
-            }
-          >
-            <WebView
-              ref={webViewRef}
-              source={{ uri: APP_URL }}
-              style={styles.webview}
-              userAgent={USER_AGENT}
-              javaScriptEnabled={true}
-              domStorageEnabled={true}
-              sharedCookiesEnabled={true}
-              thirdPartyCookiesEnabled={true}
-              allowsBackForwardNavigationGestures={true}
-              onLoadProgress={({ nativeEvent }) => setLoadProgress(nativeEvent.progress)}
-              onLoadEnd={() => setLoadProgress(1)}
-              onNavigationStateChange={nav => {
-                canGoBackRef.current = nav.canGoBack;
-              }}
-              onError={() => setLoadProgress(1)}
-            />
-          </ScrollView>
+          {/* WebView utama dengan konfigurasi Scale & Scroll Native */}
+          <WebView
+            ref={webViewRef}
+            source={{ uri: APP_URL }}
+            style={styles.webview}
+            userAgent={USER_AGENT}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+            sharedCookiesEnabled={true}
+            thirdPartyCookiesEnabled={true}
+
+            // Performa & Skala tampilan QA fixes
+            textZoom={100} // Cegah settingan font raksasa di OS Android merusak UI Web
+            bounces={false} // Matikan efek memantul khas iOS Safari
+            overScrollMode="never" // Matikan glow effect scroll mentok Android
+            pullToRefreshEnabled={true} // Pull to refresh native dari react-native-webview
+
+            // Media support (opsional jika PWA main media)
+            allowsInlineMediaPlayback={true}
+            mediaPlaybackRequiresUserAction={false}
+            geolocationEnabled={true}
+
+            allowsBackForwardNavigationGestures={true}
+
+            // Loading tracker
+            onLoadProgress={({ nativeEvent }) => setLoadProgress(nativeEvent.progress)}
+            onLoadEnd={() => setLoadProgress(1)}
+            onError={() => setLoadProgress(1)}
+
+            // Navigasi
+            onNavigationStateChange={nav => {
+              canGoBackRef.current = nav.canGoBack;
+            }}
+
+            // PENTING: Handle Link Eksternal (WA, Telp, Email, Store)
+            onShouldStartLoadWithRequest={(request) => {
+              const url = request.url;
+              // Izinkan link web biasa dibuka di dalam WebView
+              if (url.startsWith('http://') || url.startsWith('https://')) {
+                return true;
+              }
+              // Link khusus (tel:, mailto:, whatsapp:, intent://) serahkan ke OS Android
+              Linking.canOpenURL(url).then(supported => {
+                if (supported) {
+                  Linking.openURL(url);
+                }
+              }).catch(err => console.log('Gagal buka URL eksternal:', err));
+
+              // Blokir WebView agar tidak load / crash dari unknown schema
+              return false;
+            }}
+          />
         </>
       )}
     </View>
@@ -154,11 +173,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#ffffff',
   },
-  scrollContent: {
-    flex: 1,
-  },
   webview: {
     flex: 1,
     height: '100%',
+    backgroundColor: '#ffffff', // Menghindari sekilas blank background
   },
 });
